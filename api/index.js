@@ -267,9 +267,9 @@ bot.on('text', async (ctx) => {
         await ctx.sendChatAction('typing');
         await ctx.reply("⏳ در حال تحلیل و تصحیح متن SST شما طبق معیارهای PTE...");
 
-        // فراخوانی مدل Gemini
+        // فراخوانی مدل Gemini (اصلاح شده)
         const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
+            model: 'gemini-2.0-flash',
             contents: text,
             config: {
                 systemInstruction: SYSTEM_PROMPT,
