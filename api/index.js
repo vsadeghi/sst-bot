@@ -269,7 +269,7 @@ bot.on('text', async (ctx) => {
 
         // فراخوانی مدل Gemini (اصلاح شده)
         const response = await ai.models.generateContent({
-            model: 'gemini-2.0-flash',
+            model: 'gemini-1.5-flash',
             contents: text,
             config: {
                 systemInstruction: SYSTEM_PROMPT,
