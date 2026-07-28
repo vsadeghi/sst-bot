@@ -1,15 +1,13 @@
 require('dotenv').config();
 const express = require('express');
 const { Telegraf } = require('telegraf');
-const { GoogleGenAI } = require('@google/genai');
 const fetch = require('node-fetch');
 
 const app = express();
 app.use(express.json());
 
-// مقداردهی هوش مصنوعی Gemini و ربات تلگرام
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
+// مقداردهی ربات تلگرام
+const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN || '');
 
 // --- Admin List ---
 const ADMIN_IDS = new Set(["97660313", "108265666", "6190801722"]);
@@ -229,7 +227,7 @@ bot.command('credit_reset', async (ctx) => {
     } catch (e) { ctx.reply("⚠️ خطا در ذخیره اطلاعات."); }
 });
 
-// --- Text Handler (SST Processing via Gemini) ---
+// --- Text Handler (Direct Gemini REST API Call) ---
 bot.on('text', async (ctx) => {
     if (ctx.message.text.startsWith('/')) return;
 
@@ -267,14 +265,35 @@ bot.on('text', async (ctx) => {
         await ctx.sendChatAction('typing');
         await ctx.reply("⏳ در حال تحلیل و تصحیح متن SST شما طبق معیارهای PTE...");
 
-        // فراخوانی مدل Gemini (اصلاح شده)
-        const response = await ai.models.generateContent({
-            model: 'gemini-1.5-flash',
-            contents: text,
-            config: {
-                systemInstruction: SYSTEM_PROMPT,
-            }
+        // فراخوانی مستقیم Gemini API از طریق REST
+        const geminiApiKey = process.env.GEMINI_API_KEY;
+        if (!geminiApiKey) {
+            throw new Error("GEMINI_API_KEY is not defined in environment variables");
+        }
+
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`;
+
+        const aiResponse = await fetch(geminiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                systemInstruction: {
+                    parts: [{ text: SYSTEM_PROMPT }]
+                },
+                contents: [{
+                    role: 'user',
+                    parts: [{ text: text }]
+                }]
+            })
         });
+
+        if (!aiResponse.ok) {
+            const errData = await aiResponse.text();
+            throw new Error(`Gemini API Error: ${aiResponse.status} - ${errData}`);
+        }
+
+        const aiData = await aiResponse.json();
+        const aiReply = aiData.candidates?.[0]?.content?.parts?.[0]?.text || "متأسفانه پاسخی دریافت نشد.";
 
         if (!isAdmin(userId)) {
             db = await getDB();
@@ -282,7 +301,7 @@ bot.on('text', async (ctx) => {
             await saveDB(db);
         }
 
-        await safeReply(ctx, response.text);
+        await safeReply(ctx, aiReply);
 
     } catch (e) {
         console.error('❌ Error in text handler:', e);
