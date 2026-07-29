@@ -1,12 +1,18 @@
 require('dotenv').config();
 const express = require('express');
 const { Telegraf } = require('telegraf');
+const Anthropic = require('@anthropic-ai/sdk');
 
 const app = express();
 app.use(express.json());
 
 // مقداردهی ربات تلگرام
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN || '');
+
+// مقداردهی SDK رسمی Anthropic
+const anthropic = new Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY || ''
+});
 
 // --- Admin List ---
 const ADMIN_IDS = new Set(["97660313", "108265666", "6190801722"]);
@@ -138,33 +144,43 @@ async function safeReply(ctx, text) {
     }
 }
 
-// --- Anthropic Claude API Call ---
-async function fetchClaudeAI(userText, apiKey) {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-            'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01',
-            'content-type': 'application/json'
-        },
-        signal: AbortSignal.timeout(30000),
-        body: JSON.stringify({
-            model: 'claude-3-5-sonnet-latest',
-            max_tokens: 1500,
-            system: SYSTEM_PROMPT,
-            messages: [
-                { role: 'user', content: userText }
-            ]
-        })
-    });
+// --- Anthropic SDK Integration (With 4.6 Sonnet Priority & Fallbacks) ---
+async function fetchClaudeAI(userText) {
+    // اولویت اول: Claude 4.6 Sonnet
+    // در صورت عدم پاسخگویی: فال‌بک خودکار به مدل‌های 3.7 و 3.5 Sonnet
+    const modelsToTry = [
+        'claude-4-6-sonnet-latest',
+        'claude-4-6-sonnet',
+        'claude-3-7-sonnet-20250219',
+        'claude-3-5-sonnet-20241022',
+        'claude-3-5-sonnet-20240620'
+    ];
 
-    if (!response.ok) {
-        const errData = await response.text();
-        throw new Error(`Claude API Error (${response.status}): ${errData}`);
+    let lastError = null;
+
+    for (const modelName of modelsToTry) {
+        try {
+            const message = await anthropic.messages.create({
+                model: modelName,
+                max_tokens: 1500,
+                system: SYSTEM_PROMPT,
+                messages: [
+                    { role: 'user', content: userText }
+                ]
+            });
+
+            const replyText = message.content?.[0]?.text;
+            if (replyText) {
+                console.log(`✅ پاسخ موفقیت‌آمیز با مدل دریافت شد: ${modelName}`);
+                return replyText;
+            }
+        } catch (err) {
+            lastError = `Model ${modelName} error: ${err.message}`;
+            console.warn(`⚠️ تلاش برای مدل ${modelName} ناموفق بود:`, err.message);
+        }
     }
 
-    const data = await response.json();
-    return data.content?.[0]?.text || "متأسفانه پاسخی دریافت نشد.";
+    throw new Error(`All Anthropic models failed. Detail: ${lastError}`);
 }
 
 // --- Commands ---
@@ -303,8 +319,8 @@ bot.on('text', async (ctx) => {
             throw new Error("ANTHROPIC_API_KEY is not defined in environment variables");
         }
 
-        // فراخوانی مستقیم API رسمی Claude Sonnet
-        const aiReply = await fetchClaudeAI(text, anthropicApiKey);
+        // فراخوانی با اولویت 4.6 Sonnet و فال‌بک روی مدل‌های دیگر
+        const aiReply = await fetchClaudeAI(text);
 
         if (!isAdmin(userId)) {
             db = await getDB();
@@ -333,6 +349,6 @@ app.post(`/api/bot`, async (req, res) => {
     }
 });
 
-app.get('/', (req, res) => res.send('SST Correction Bot (Claude Sonnet Powered) is running...'));
+app.get('/', (req, res) => res.send('SST Correction Bot is running...'));
 
 module.exports = app;
