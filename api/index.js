@@ -5,8 +5,10 @@ const { Telegraf } = require('telegraf');
 const app = express();
 app.use(express.json());
 
-// مقداردهی ربات تلگرام
-const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN || '');
+// مقداردهی ربات تلگرام با افزایش زمان مهلت پردازش
+const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN || '', {
+    handlerTimeout: 120000
+});
 
 // --- Admin List ---
 const ADMIN_IDS = new Set(["97660313", "108265666", "6190801722"]);
@@ -25,7 +27,8 @@ async function getDB() {
             headers: {
                 ...JSONBIN_HEADERS,
                 "X-Bin-Meta": "false"
-            } 
+            },
+            signal: AbortSignal.timeout(8000)
         });
         if (!response.ok) throw new Error(`DB Fetch Failed: ${response.statusText}`);
         const data = await response.json();
@@ -49,7 +52,8 @@ async function saveDB(data) {
                 ...JSONBIN_HEADERS,
                 "X-Bin-Meta": "false"
             },
-            body: JSON.stringify(data)
+            body: JSON.stringify(data),
+            signal: AbortSignal.timeout(8000)
         });
         return response.ok;
     } catch (err) {
@@ -133,15 +137,14 @@ async function safeReply(ctx, text) {
     }
 }
 
-// --- Smart Gemini API Call (With New Models Fallback) ---
+// --- Smart Gemini API Call (With Strict 10s Timeouts) ---
 async function fetchGeminiAI(userText, apiKey) {
-    // لیست اولویت‌بندی شده جدیدترین مدل‌های فعال روی API Key شما
+    // اولویت‌بندی بر اساس سرعت و پایداری واقعی
     const modelsToTry = [
-        'gemini-3.6-flash',
-        'gemini-3.5-flash',
-        'gemini-3.1-flash-lite',
         'gemini-2.5-flash',
-        'gemini-2.0-flash'
+        'gemini-3.5-flash',
+        'gemini-2.0-flash',
+        'gemini-3.1-flash-lite'
     ];
 
     let lastError = null;
@@ -149,9 +152,12 @@ async function fetchGeminiAI(userText, apiKey) {
     for (const model of modelsToTry) {
         try {
             const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+            
+            // تایم‌اوت سخت‌گیرانه ۱۰ ثانیه‌ای برای هر مدل جهت جلوگیری از معلق ماندن
             const response = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                signal: AbortSignal.timeout(10000),
                 body: JSON.stringify({
                     systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
                     contents: [{ role: 'user', parts: [{ text: userText }] }]
@@ -161,14 +167,18 @@ async function fetchGeminiAI(userText, apiKey) {
             if (response.ok) {
                 const data = await response.json();
                 const replyText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-                if (replyText) return replyText;
+                if (replyText) {
+                    console.log(`✅ پاسخ موفقیت‌آمیز با مدل دریافت شد: ${model}`);
+                    return replyText;
+                }
             } else {
                 const errText = await response.text();
                 lastError = `Model ${model} failed (${response.status}): ${errText}`;
-                console.warn(lastError);
+                console.warn(`⚠️ مدل ${model} خطا داد:`, lastError);
             }
         } catch (err) {
-            lastError = err.message;
+            lastError = `Model ${model} error/timeout: ${err.message}`;
+            console.warn(lastError);
         }
     }
 
@@ -311,7 +321,7 @@ bot.on('text', async (ctx) => {
             throw new Error("GEMINI_API_KEY is not defined in environment variables");
         }
 
-        // فراخوانی هوشمند با لیست مدل‌های جدید
+        // فراخوانی مستقیم با مدیریت تایم‌اوت‌ها
         const aiReply = await fetchGeminiAI(text, geminiApiKey);
 
         if (!isAdmin(userId)) {
