@@ -1,7 +1,6 @@
 require('dotenv').config();
 const express = require('express');
 const { Telegraf } = require('telegraf');
-const fetch = require('node-fetch');
 
 const app = express();
 app.use(express.json());
@@ -265,10 +264,10 @@ bot.on('text', async (ctx) => {
         await ctx.sendChatAction('typing');
         await ctx.reply("⏳ در حال تحلیل و تصحیح متن SST شما طبق معیارهای PTE...");
 
-        // فراخوانی مستقیم Gemini API از طریق REST
+        // فراخوانی مستقیم Gemini API
         const geminiApiKey = process.env.GEMINI_API_KEY;
         if (!geminiApiKey) {
-            throw new Error("GEMINI_API_KEY is not defined in environment variables");
+            throw new Error("GEMINI_API_KEY is not defined");
         }
 
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`;
@@ -310,7 +309,17 @@ bot.on('text', async (ctx) => {
 });
 
 // --- Vercel Serverless Endpoint ---
-app.post(`/api/bot`, (req, res) => bot.handleUpdate(req.body, res));
+app.post(`/api/bot`, async (req, res) => {
+    try {
+        await bot.handleUpdate(req.body, res);
+    } catch (err) {
+        console.error("Webhook Execution Error:", err);
+    }
+    if (!res.headersSent) {
+        res.status(200).send('OK');
+    }
+});
+
 app.get('/', (req, res) => res.send('SST Correction Bot is running...'));
 
 module.exports = app;
