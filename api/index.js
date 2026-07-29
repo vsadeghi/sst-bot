@@ -138,7 +138,7 @@ async function safeReply(ctx, text) {
     }
 }
 
-// --- Anthropic Claude 4.6 API Call ---
+// --- Anthropic Claude API Call ---
 async function fetchClaudeAI(userText, apiKey) {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
@@ -149,7 +149,7 @@ async function fetchClaudeAI(userText, apiKey) {
         },
         signal: AbortSignal.timeout(30000),
         body: JSON.stringify({
-            model: 'claude-4-6-sonnet-latest',
+            model: 'claude-3-5-sonnet-latest',
             max_tokens: 1500,
             system: SYSTEM_PROMPT,
             messages: [
@@ -303,7 +303,7 @@ bot.on('text', async (ctx) => {
             throw new Error("ANTHROPIC_API_KEY is not defined in environment variables");
         }
 
-        // فراخوانی مستقیم API کلود 4.6
+        // فراخوانی مستقیم API رسمی Claude Sonnet
         const aiReply = await fetchClaudeAI(text, anthropicApiKey);
 
         if (!isAdmin(userId)) {
@@ -333,6 +333,6 @@ app.post(`/api/bot`, async (req, res) => {
     }
 });
 
-app.get('/', (req, res) => res.send('SST Correction Bot (Claude 4.6 Powered) is running...'));
+app.get('/', (req, res) => res.send('SST Correction Bot (Claude Sonnet Powered) is running...'));
 
 module.exports = app;
