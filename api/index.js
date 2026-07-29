@@ -133,6 +133,48 @@ async function safeReply(ctx, text) {
     }
 }
 
+// --- Smart Gemini API Call (With New Models Fallback) ---
+async function fetchGeminiAI(userText, apiKey) {
+    // لیست اولویت‌بندی شده جدیدترین مدل‌های فعال روی API Key شما
+    const modelsToTry = [
+        'gemini-3.6-flash',
+        'gemini-3.5-flash',
+        'gemini-3.1-flash-lite',
+        'gemini-2.5-flash',
+        'gemini-2.0-flash'
+    ];
+
+    let lastError = null;
+
+    for (const model of modelsToTry) {
+        try {
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+                    contents: [{ role: 'user', parts: [{ text: userText }] }]
+                })
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                const replyText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (replyText) return replyText;
+            } else {
+                const errText = await response.text();
+                lastError = `Model ${model} failed (${response.status}): ${errText}`;
+                console.warn(lastError);
+            }
+        } catch (err) {
+            lastError = err.message;
+        }
+    }
+
+    throw new Error(`All Gemini models failed. Detail: ${lastError}`);
+}
+
 // --- Commands ---
 bot.start((ctx) => ctx.reply('خوش آمدید! متن خلاصه‌نویسی (SST) خود را بفرستید.'));
 
@@ -226,7 +268,7 @@ bot.command('credit_reset', async (ctx) => {
     } catch (e) { ctx.reply("⚠️ خطا در ذخیره اطلاعات."); }
 });
 
-// --- Text Handler (Direct Gemini REST API Call) ---
+// --- Text Handler ---
 bot.on('text', async (ctx) => {
     if (ctx.message.text.startsWith('/')) return;
 
@@ -264,35 +306,13 @@ bot.on('text', async (ctx) => {
         await ctx.sendChatAction('typing');
         await ctx.reply("⏳ در حال تحلیل و تصحیح متن SST شما طبق معیارهای PTE...");
 
-        // فراخوانی مستقیم Gemini API
         const geminiApiKey = process.env.GEMINI_API_KEY;
         if (!geminiApiKey) {
-            throw new Error("GEMINI_API_KEY is not defined");
+            throw new Error("GEMINI_API_KEY is not defined in environment variables");
         }
 
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`;
-
-        const aiResponse = await fetch(geminiUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                systemInstruction: {
-                    parts: [{ text: SYSTEM_PROMPT }]
-                },
-                contents: [{
-                    role: 'user',
-                    parts: [{ text: text }]
-                }]
-            })
-        });
-
-        if (!aiResponse.ok) {
-            const errData = await aiResponse.text();
-            throw new Error(`Gemini API Error: ${aiResponse.status} - ${errData}`);
-        }
-
-        const aiData = await aiResponse.json();
-        const aiReply = aiData.candidates?.[0]?.content?.parts?.[0]?.text || "متأسفانه پاسخی دریافت نشد.";
+        // فراخوانی هوشمند با لیست مدل‌های جدید
+        const aiReply = await fetchGeminiAI(text, geminiApiKey);
 
         if (!isAdmin(userId)) {
             db = await getDB();
