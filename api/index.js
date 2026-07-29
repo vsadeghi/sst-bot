@@ -5,10 +5,8 @@ const { Telegraf } = require('telegraf');
 const app = express();
 app.use(express.json());
 
-// مقداردهی ربات تلگرام با افزایش زمان مهلت پردازش
-const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN || '', {
-    handlerTimeout: 120000
-});
+// مقداردهی ربات تلگرام
+const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN || '');
 
 // --- Admin List ---
 const ADMIN_IDS = new Set(["97660313", "108265666", "6190801722"]);
@@ -28,7 +26,7 @@ async function getDB() {
                 ...JSONBIN_HEADERS,
                 "X-Bin-Meta": "false"
             },
-            signal: AbortSignal.timeout(8000)
+            signal: AbortSignal.timeout(10000)
         });
         if (!response.ok) throw new Error(`DB Fetch Failed: ${response.statusText}`);
         const data = await response.json();
@@ -53,7 +51,7 @@ async function saveDB(data) {
                 "X-Bin-Meta": "false"
             },
             body: JSON.stringify(data),
-            signal: AbortSignal.timeout(8000)
+            signal: AbortSignal.timeout(10000)
         });
         return response.ok;
     } catch (err) {
@@ -79,7 +77,7 @@ function ensureUser(db, userId) {
     return { db, migrated };
 }
 
-// --- SYSTEM PROMPT (SST Specialist) ---
+// --- SYSTEM PROMPT (SST Specialist with Optional Grammar Tip) ---
 const SYSTEM_PROMPT = `از این به بعد نقش یک ارزیاب و ویرایشگر متخصص آزمون PTE Academic در بخش Summarize Spoken Text (SST) را داری. وظیفه تو تحلیل، نمره‌دهی و تصحیح متون خلاصه‌نویسی‌شده کاربران است.
 
 مهم‌ترین معیارهای ارزیابی:
@@ -121,7 +119,10 @@ The lecture provided a comprehensive overview of [Topic], focusing on [Main Idea
 
 💡 **نسخه پیشنهادی منطبق بر تمپلت استاندارد:**
 [متن بر اساس تمپلت]
-• **Word Count:** [X]`;
+• **Word Count:** [X]
+
+🎓 **نکته آموزشی گرامر:**
+(شرط مهم: این بخش را فقط و فقط زمانی در انتهای خروجی بیاور که کاربر خطای گرامری مشهودی داشته باشد. دلیل اصلی خطا و ساختار صحیح آن را خیلی کوتاه، ساده و کاربردی آموزش بده. اگر کاربر هیچ خطای گرامری مشهودی نداشت، این عنوان و بخش را کلاً حذف کن و ارسال نکن.)`;
 
 // --- Safe Multi-part Reply & UTF-8 Cleaning ---
 async function safeReply(ctx, text) {
@@ -137,14 +138,13 @@ async function safeReply(ctx, text) {
     }
 }
 
-// --- Smart Gemini API Call (With Strict 10s Timeouts) ---
+// --- Smart Gemini API Call (Non-Thinking Models First) ---
 async function fetchGeminiAI(userText, apiKey) {
-    // اولویت‌بندی بر اساس سرعت و پایداری واقعی
     const modelsToTry = [
-        'gemini-2.5-flash',
-        'gemini-3.5-flash',
         'gemini-2.0-flash',
-        'gemini-3.1-flash-lite'
+        'gemini-2.0-flash-lite',
+        'gemini-2.5-flash',
+        'gemini-3.5-flash'
     ];
 
     let lastError = null;
@@ -153,11 +153,10 @@ async function fetchGeminiAI(userText, apiKey) {
         try {
             const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
             
-            // تایم‌اوت سخت‌گیرانه ۱۰ ثانیه‌ای برای هر مدل جهت جلوگیری از معلق ماندن
             const response = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                signal: AbortSignal.timeout(10000),
+                signal: AbortSignal.timeout(20000),
                 body: JSON.stringify({
                     systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
                     contents: [{ role: 'user', parts: [{ text: userText }] }]
@@ -321,7 +320,6 @@ bot.on('text', async (ctx) => {
             throw new Error("GEMINI_API_KEY is not defined in environment variables");
         }
 
-        // فراخوانی مستقیم با مدیریت تایم‌اوت‌ها
         const aiReply = await fetchGeminiAI(text, geminiApiKey);
 
         if (!isAdmin(userId)) {
@@ -341,12 +339,13 @@ bot.on('text', async (ctx) => {
 // --- Vercel Serverless Endpoint ---
 app.post(`/api/bot`, async (req, res) => {
     try {
-        await bot.handleUpdate(req.body, res);
+        await bot.handleUpdate(req.body);
     } catch (err) {
         console.error("Webhook Execution Error:", err);
-    }
-    if (!res.headersSent) {
-        res.status(200).send('OK');
+    } finally {
+        if (!res.headersSent) {
+            res.status(200).send('OK');
+        }
     }
 });
 
