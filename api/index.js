@@ -138,50 +138,33 @@ async function safeReply(ctx, text) {
     }
 }
 
-// --- Smart Gemini API Call (Non-Thinking Models First) ---
-async function fetchGeminiAI(userText, apiKey) {
-    const modelsToTry = [
-        'gemini-2.0-flash',
-        'gemini-2.0-flash-lite',
-        'gemini-2.5-flash',
-        'gemini-3.5-flash'
-    ];
+// --- Anthropic Claude 4.6 API Call ---
+async function fetchClaudeAI(userText, apiKey) {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+            'content-type': 'application/json'
+        },
+        signal: AbortSignal.timeout(30000),
+        body: JSON.stringify({
+            model: 'claude-4-6-sonnet-latest',
+            max_tokens: 1500,
+            system: SYSTEM_PROMPT,
+            messages: [
+                { role: 'user', content: userText }
+            ]
+        })
+    });
 
-    let lastError = null;
-
-    for (const model of modelsToTry) {
-        try {
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-            
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                signal: AbortSignal.timeout(20000),
-                body: JSON.stringify({
-                    systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-                    contents: [{ role: 'user', parts: [{ text: userText }] }]
-                })
-            });
-
-            if (response.ok) {
-                const data = await response.json();
-                const replyText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-                if (replyText) {
-                    console.log(`✅ پاسخ موفقیت‌آمیز با مدل دریافت شد: ${model}`);
-                    return replyText;
-                }
-            } else {
-                const errText = await response.text();
-                lastError = `Model ${model} failed (${response.status}): ${errText}`;
-                console.warn(`⚠️ مدل ${model} خطا داد:`, lastError);
-            }
-        } catch (err) {
-            lastError = `Model ${model} error/timeout: ${err.message}`;
-            console.warn(lastError);
-        }
+    if (!response.ok) {
+        const errData = await response.text();
+        throw new Error(`Claude API Error (${response.status}): ${errData}`);
     }
 
-    throw new Error(`All Gemini models failed. Detail: ${lastError}`);
+    const data = await response.json();
+    return data.content?.[0]?.text || "متأسفانه پاسخی دریافت نشد.";
 }
 
 // --- Commands ---
@@ -315,12 +298,13 @@ bot.on('text', async (ctx) => {
         await ctx.sendChatAction('typing');
         await ctx.reply("⏳ در حال تحلیل و تصحیح متن SST شما طبق معیارهای PTE...");
 
-        const geminiApiKey = process.env.GEMINI_API_KEY;
-        if (!geminiApiKey) {
-            throw new Error("GEMINI_API_KEY is not defined in environment variables");
+        const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+        if (!anthropicApiKey) {
+            throw new Error("ANTHROPIC_API_KEY is not defined in environment variables");
         }
 
-        const aiReply = await fetchGeminiAI(text, geminiApiKey);
+        // فراخوانی مستقیم API کلود 4.6
+        const aiReply = await fetchClaudeAI(text, anthropicApiKey);
 
         if (!isAdmin(userId)) {
             db = await getDB();
@@ -349,6 +333,6 @@ app.post(`/api/bot`, async (req, res) => {
     }
 });
 
-app.get('/', (req, res) => res.send('SST Correction Bot is running...'));
+app.get('/', (req, res) => res.send('SST Correction Bot (Claude 4.6 Powered) is running...'));
 
 module.exports = app;
